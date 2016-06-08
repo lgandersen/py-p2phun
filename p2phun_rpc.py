@@ -1,4 +1,3 @@
-import pickle
 import time
 from json import JSONDecoder, JSONEncoder
 import socket
@@ -21,10 +20,6 @@ class BinJSONEncoder(JSONEncoder):
     def encode(self, obj):
         obj_string = super().encode(obj)
         return obj_string.encode('utf-8')
-
-with open('nodes.pickle', 'rb') as f:
-    nodes = pickle.load(f)
-
 
 decode = JSONDecoder()
 
@@ -61,9 +56,17 @@ class P2PhunRPC:
         self.send({'mod':mod, 'fun':fun, 'args':args})
         return self.get_result()
 
-    def create_node(self, id, port, routingtable_cfg):
-        args = [{'id':id, 'port':port, 'routingtable_cfg':routingtable_cfg}]
-        return self.apply('p2phun_node_sup', 'create_node', args)
+    def create_connection(self, id_int, host, port):
+        args = {'nodeid':id_int, 'host':host, 'port':port}
+        return self.apply('p2phun_peer_pool', 'connect', args)
+
+    def create_node(self, id, port, routingtable_cfg, managed=True):
+        if managed:
+            managed = []
+        else:
+            managed = ['no_manager']
+        args = [{'id':id, 'port':port, 'routingtable_cfg':routingtable_cfg, 'opts':managed}]
+        return self.apply('p2phun_sup', 'create_node', args)
 
     def fetch_routing_table(self, from_id):
         return self.apply('p2phun_peertable_operations', 'fetch_all', [from_id])
@@ -91,6 +94,8 @@ class RoutingTableConfig:
 
 class Node:
     def __init__(self, id_int, host, port, rt_cfg):
+        self.host = host
+        self.port = port
         self.id_int = id_int
         self.rt_cfg = rt_cfg
         self.peer_connections = []
@@ -104,14 +109,19 @@ class Node:
         return to_base64(self.id_int.to_bytes(KEY_SIZE_BYTES, 'big'))
 
 def iter_nodes(number_of_nodes, rt_cfg):
-    node_ids = range(2, number_of_nodes + 1)
+    node_ids = range(number_of_nodes)
     for n in node_ids:
         yield Node(id_int=n, host=HOST, port=5000 + n, rt_cfg=rt_cfg)
 
 if __name__ == '__main__':
     API_PORT = 4999
-    number_of_nodes = 3
+    number_of_nodes = 250
     rpc = P2PhunRPC(HOST, API_PORT)
     rt = RoutingTableConfig()
-    for node in iter_nodes(3, rt):
-        node_pid = rpc.create_node(node.id_int, node.port, rt.as_dict())
+    nodes = list(iter_nodes(number_of_nodes, rt))
+    node_pid = rpc.create_node(nodes[0].id_int, nodes[0].port, rt.as_dict())
+    for node1, node2 in zip(nodes[:-1], nodes[1:]):
+        print('Creating node:', node2.id_int)
+        node_pid = rpc.create_node(node2.id_int, node2.port, rt.as_dict())
+        result = rpc.create_connection(node1.id_int, node2.host, node2.port)
+    #print(result)
